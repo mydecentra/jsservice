@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>2Team Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          primary: { light: '#06b6d4', DEFAULT: '#0891b2', dark: '#0e7490' }
+        },
+        fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+      },
+    },
+  }
+</script>
+<style>
+  .fade-slide { animation: fadeSlide 0.5s ease forwards; }
+  @keyframes fadeSlide { from {opacity:0; transform: translateY(10px);} to {opacity:1; transform: translateY(0);} }
+
+  tbody tr { transition: background 0.3s, transform 0.2s; cursor: pointer; }
+  tbody tr:hover { background-color: rgba(14,165,233,0.1); transform: translateX(2px); }
+
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-thumb { background:rgba(148,163,184,0.6); border-radius:9999px; }
+
+  td { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td:hover { white-space: normal; overflow: visible; }
+
+  .glass {
+    backdrop-filter: blur(16px) saturate(180%);
+    background-color: rgba(255,255,255,0.75);
+  }
+  html.dark .glass {
+    background-color: rgba(30,41,59,0.6);
+  }
+</style>
+</head>
+
+<body class="bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-900 dark:to-slate-950 min-h-screen font-sans text-gray-800 dark:text-gray-100 transition-colors duration-500 flex flex-col items-center">
+
+<!-- HEADER -->
+<header class="w-full max-w-7xl mt-8 mb-8 flex flex-col md:flex-row justify-between items-start md:items-center px-6 fade-slide">
+  <h1 class="text-4xl font-extrabold bg-gradient-to-r from-cyan-500 to-blue-600 bg-clip-text text-transparent tracking-tight">
+    2Team Dashboard
+  </h1>
+  <div class="flex gap-3 items-center mt-4 md:mt-0">
+    <button id="toggleDark"
+      class="px-4 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-lg font-semibold shadow transition">
+      Toggle Dark
+    </button>
+    <div id="errorMessage" class="hidden bg-red-100 dark:bg-red-800 text-red-700 dark:text-red-200 px-4 py-2 rounded shadow text-sm transition-all"></div>
+  </div>
+</header>
+
+<!-- CONTROLS -->
+<section class="w-full max-w-7xl px-6 mb-6 grid grid-cols-1 md:grid-cols-3 gap-2 fade-slide">
+  <div class="flex flex-wrap gap-2 items-center glass p-2 rounded-xl shadow-sm text-sm">
+    <button id="toggleFilter" onclick="toggleFilter()"
+      class="px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-medium rounded-lg shadow transition">
+      Hide All Entries
+    </button>
+    <div class="flex items-center gap-1">
+      <label for="limitInput" class="text-xs font-medium">Limit:</label>
+      <input type="number" id="limitInput" min="1" max="999" value="300"
+             onchange="updateLimit(this.value)"
+             class="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 dark:bg-slate-800 text-sm">
+    </div>
+  </div>
+
+  <div class="md:col-span-2 glass p-2 rounded-xl shadow-sm flex items-center">
+    <input type="text" id="searchInput" placeholder="Search any field..."
+           class="w-full px-3 py-1.5 rounded-lg bg-transparent border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-cyan-500 outline-none placeholder-gray-400 text-sm">
+  </div>
+</section>
+
+<!-- MAIN TABLE -->
+<main class="w-full max-w-7xl mt-8 px-6 flex-1 flex flex-col fade-slide">
+  <div class="glass rounded-2xl shadow-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table id="logsTable" class="w-full text-sm border-collapse">
+        <thead class="bg-gradient-to-r from-cyan-600 to-indigo-600 dark:from-cyan-700 dark:to-indigo-700 text-white sticky top-0 shadow-md text-left">
+          <tr>
+            <th class="px-4 py-3 font-medium">#</th>
+            <th class="px-4 py-3 font-medium">Timestamp</th>
+            <th class="px-4 py-3 font-medium">Country</th>
+            <th class="px-4 py-3 font-medium">Region</th>
+            <th class="px-4 py-3 font-medium">City</th>
+            <th class="px-4 py-3 font-medium">Method</th>
+            <th class="px-4 py-3 font-medium">Tool</th>
+            <th class="px-4 py-3 font-medium">IP</th>
+            <th class="px-4 py-3 font-medium">Request URL</th>
+          </tr>
+        </thead>
+        <tbody id="logsTableBody" class="divide-y divide-gray-200 dark:divide-gray-700"></tbody>
+      </table>
+    </div>
+    <div id="loadingSpinner" class="hidden flex justify-center items-center py-8">
+      <div class="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+    </div>
+  </div>
+</main>
+
+<!-- FIREBASE + JS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.1/firebase-app-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.1/firebase-firestore-compat.js"></script>
+<script>
+let LIMITNUMBER = 300;
+let unsubscribe = null;
+let db;
+let allData = [];
+
+// ✅ Request Chrome Notification permission
+if ("Notification" in window) {
+  Notification.requestPermission().then((permission) => {
+    console.log("Notification permission:", permission);
+  });
+}
+
+try {
+  const firebaseConfig = {
+  apiKey: "AIzaSyCDUs5JifXz8fMNddMeuS6UajzNyLOdEks",
+  authDomain: "jsservice-data1.firebaseapp.com",
+  projectId: "jsservice-data1",
+  storageBucket: "jsservice-data1.firebasestorage.app",
+  messagingSenderId: "1007340356151",
+  appId: "1:1007340356151:web:b7b50c81fa146a524775b2",
+  measurementId: "G-SNKLNFK01Z"
+};
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+} catch (err) {
+  showError("Firebase init error: " + err.message);
+}
+
+// 🔔 Show Chrome-style system notification
+function showSystemNotification(title, body) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    const notification = new Notification(title, {
+      body,
+      icon: "https://cdn-icons-png.flaticon.com/512/190/190411.png",
+    });
+    setTimeout(() => notification.close(), 5000);
+  }
+}
+
+function showError(msg){
+  const e=document.getElementById("errorMessage");
+  e.textContent=msg; e.classList.remove("hidden");
+  setTimeout(()=>e.classList.add("hidden"),4000);
+}
+
+function createTableRow(doc,index){
+  const d=doc.data();
+  return `
+    <tr class="fade-slide hover:bg-cyan-50 dark:hover:bg-slate-800 transition">
+      <td class="px-4 py-2">${index}</td>
+      <td class="px-4 py-2">${d.timestamp||"N/A"}</td>
+      <td class="px-4 py-2">${d.country||"N/A"}</td>
+      <td class="px-4 py-2">${d.regionName||"N/A"}</td>
+      <td class="px-4 py-2">${d.city||"N/A"}</td>
+      <td class="px-4 py-2">${d.method||"N/A"}</td>
+      <td class="px-4 py-2">${d.source||"N/A"}</td>
+      <td class="px-4 py-2">${d.ip||"N/A"}</td>
+      <td class="px-4 py-2 truncate" title="${d.url}">${d.url||"N/A"}</td>
+    </tr>`;
+}
+
+function updateLimit(value){
+  const n=parseInt(value);
+  if(n>0&&n<1000){
+    LIMITNUMBER=n;
+    if(unsubscribe) unsubscribe();
+    document.getElementById("logsTableBody").innerHTML="";
+    initializeFirestoreListener();
+  }
+}
+
+function toggleFilter(){
+  const btn=document.getElementById("toggleFilter");
+  const rows=document.querySelectorAll("tr[data-url='/mine/list']");
+  const showingAll=btn.textContent.includes("Hide");
+  rows.forEach(r=>r.classList.toggle("hidden",showingAll));
+  btn.textContent=showingAll?"Show All Entries":"Hide All Entries";
+}
+
+function applySearch(){
+  const term=document.getElementById("searchInput").value.toLowerCase();
+  const body=document.getElementById("logsTableBody");
+  body.innerHTML="";
+  let idx=0;
+  allData.forEach(doc=>{
+    const d=doc.data();
+    const combined=`${d.timestamp||''} ${d.country||''} ${d.regionName||''} ${d.city||''} ${d.method||''} ${d.source||''} ${d.ip||''} ${d.url||''}`.toLowerCase();
+    if(combined.includes(term)){idx++; body.insertAdjacentHTML("beforeend", createTableRow(doc, idx));}
+  });
+}
+document.getElementById("searchInput").addEventListener("input", applySearch);
+
+function initializeFirestoreListener(){
+  const spinner = document.getElementById("loadingSpinner");
+  spinner.classList.remove("hidden");
+  const body = document.getElementById("logsTableBody");
+
+  unsubscribe = db.collection("requests")
+    .orderBy("timestamp", "desc")
+    .limit(LIMITNUMBER)
+    .onSnapshot(snapshot => {
+      spinner.classList.add("hidden");
+
+      // 🔹 First load: render all in descending order
+      if (snapshot.docChanges().every(c => c.type === "added") && allData.length === 0) {
+        allData = snapshot.docs; // All docs, already in desc order
+        body.innerHTML = "";
+        allData.forEach((doc, i) => {
+          body.insertAdjacentHTML("beforeend", createTableRow(doc, i + 1));
+        });
+        return;
+      }
+
+      // 🔹 For real-time additions
+      snapshot.docChanges().forEach(change => {
+        if (change.type === "added" && allData.length > 0) {
+          const d = change.doc.data();
+          allData.unshift(change.doc);
+          body.insertAdjacentHTML("afterbegin", createTableRow(change.doc, 1));
+
+          // ✅ Show Chrome notification for each new document
+          showSystemNotification("New Item Is Added", `${d.country||"Unknown"} — ${d.url||"No URL"}`);
+        }
+      });
+
+    }, err => {
+      spinner.classList.add("hidden");
+      showError(err.message);
+    });
+}
+
+initializeFirestoreListener();
+document.getElementById("toggleDark").addEventListener("click",()=>document.documentElement.classList.toggle("dark"));
+</script>
+</body>
+</html>
